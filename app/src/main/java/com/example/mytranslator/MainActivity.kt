@@ -34,30 +34,30 @@ import java.util.concurrent.atomic.AtomicBoolean
 // LANGUAGE LIST
 // ─────────────────────────────────────────────
 
-data class Language(val name: String, val locale: String, val voice: String)
+data class LangOption(val name: String, val locale: String, val voice: String)
 
 val LANGUAGES = listOf(
-    Language("English",                    "en-US",  "en-US-JennyNeural"),
-    Language("Malay",                      "ms-MY",  "ms-MY-YasminNeural"),
-    Language("Chinese (Mandarin)",         "zh-CN",  "zh-CN-XiaoxiaoNeural"),
-    Language("Bengali",                    "bn-IN",  "bn-IN-TanishaaNeural"),
-    Language("Tamil",                      "ta-IN",  "ta-IN-PallaviNeural"),
-    Language("Chinese (Cantonese)",        "zh-HK",  "zh-HK-HiuMaanNeural"),
-    Language("Japanese",                   "ja-JP",  "ja-JP-NanamiNeural"),
-    Language("Filipino",                   "fil-PH", "fil-PH-BlessicaNeural"),
-    Language("Korean",                     "ko-KR",  "ko-KR-SunHiNeural"),
-    Language("Thai",                       "th-TH",  "th-TH-PremwadeeNeural"),
-    Language("French",                     "fr-FR",  "fr-FR-DeniseNeural"),
-    Language("German",                     "de-DE",  "de-DE-KatjaNeural"),
-    Language("Arabic",                     "ar-SA",  "ar-SA-ZariyahNeural"),
-    Language("Russian",                    "ru-RU",  "ru-RU-SvetlanaNeural"),
-    Language("Spanish",                    "es-ES",  "es-ES-ElviraNeural"),
-    Language("Vietnamese",                 "vi-VN",  "vi-VN-HoaiMyNeural"),
-    Language("Burmese",                    "my-MM",  "my-MM-NilarNeural"),
-    Language("Lao",                        "lo-LA",  "lo-LA-KeomanyNeural"),
-    Language("Nepali",                     "ne-NP",  "ne-NP-HemkalaNeural"),
-    Language("Khmer",                      "km-KH",  "km-KH-SreymomNeural"),
-    Language("Ukrainian",                  "uk-UA",  "uk-UA-PolinaNeural")
+    LangOption("English",                 "en-US",  "en-US-JennyNeural"),
+    LangOption("Malay",                   "ms-MY",  "ms-MY-YasminNeural"),
+    LangOption("Chinese (Mandarin)",      "zh-CN",  "zh-CN-XiaoxiaoNeural"),
+    LangOption("Bengali",                 "bn-IN",  "bn-IN-TanishaaNeural"),
+    LangOption("Tamil",                   "ta-IN",  "ta-IN-PallaviNeural"),
+    LangOption("Chinese (Cantonese)",     "zh-HK",  "zh-HK-HiuMaanNeural"),
+    LangOption("Japanese",                "ja-JP",  "ja-JP-NanamiNeural"),
+    LangOption("Filipino",                "fil-PH", "fil-PH-BlessicaNeural"),
+    LangOption("Korean",                  "ko-KR",  "ko-KR-SunHiNeural"),
+    LangOption("Thai",                    "th-TH",  "th-TH-PremwadeeNeural"),
+    LangOption("French",                  "fr-FR",  "fr-FR-DeniseNeural"),
+    LangOption("German",                  "de-DE",  "de-DE-KatjaNeural"),
+    LangOption("Arabic",                  "ar-SA",  "ar-SA-ZariyahNeural"),
+    LangOption("Russian",                 "ru-RU",  "ru-RU-SvetlanaNeural"),
+    LangOption("Spanish",                 "es-ES",  "es-ES-ElviraNeural"),
+    LangOption("Vietnamese",              "vi-VN",  "vi-VN-HoaiMyNeural"),
+    LangOption("Burmese",                 "my-MM",  "my-MM-NilarNeural"),
+    LangOption("Lao",                     "lo-LA",  "lo-LA-KeomanyNeural"),
+    LangOption("Nepali",                  "ne-NP",  "ne-NP-HemkalaNeural"),
+    LangOption("Khmer",                   "km-KH",  "km-KH-SreymomNeural"),
+    LangOption("Ukrainian",               "uk-UA",  "uk-UA-PolinaNeural")
 )
 
 // ─────────────────────────────────────────────
@@ -80,8 +80,8 @@ class TranslatorManager {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun start(
-        langA: Language,
-        langB: Language,
+        langA: LangOption,
+        langB: LangOption,
         onStateChange: (AppState) -> Unit,
         onError: (String) -> Unit
     ) {
@@ -138,7 +138,7 @@ class TranslatorManager {
 
     private fun speakTranslation(
         text: String,
-        targetLang: Language,
+        targetLang: LangOption,
         onStateChange: (AppState) -> Unit
     ) {
         isSpeaking.set(true)
@@ -222,8 +222,8 @@ fun TranslatorScreen(
     onRequestPermission: () -> Unit,
     hasMicPermission: () -> Boolean
 ) {
-    var langA        by remember { mutableStateOf(LANGUAGES[0]) }  // Default: English
-    var langB        by remember { mutableStateOf(LANGUAGES[1]) }  // Default: Malay
+    var langA        by remember { mutableStateOf<LangOption>(LANGUAGES[0]) }  // Default: English
+    var langB        by remember { mutableStateOf<LangOption>(LANGUAGES[1]) }  // Default: Malay
     var appState     by remember { mutableStateOf(AppState.IDLE) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var expandedA    by remember { mutableStateOf(false) }
