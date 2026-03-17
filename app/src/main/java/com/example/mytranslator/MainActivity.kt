@@ -108,7 +108,8 @@ class TranslatorManager {
             recognizer!!.recognized.addEventListener { _, e ->
                 if (e.result.reason == ResultReason.TranslatedSpeech && !isSpeaking.get()) {
 
-                    val detectedCode = e.result.language.split("-")[0] // e.g. "en"
+                    val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
+                    val detectedCode = autoDetectResult.language.split("-")[0] // e.g. "en"
 
                     // If speaker used Language A → speak translation in Language B, and vice versa
                     val targetLang = if (detectedCode == codeA) langB else langA
