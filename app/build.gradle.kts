@@ -19,6 +19,12 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val localProps = com.android.build.gradle.internal.cxx.configure.gradleLocalProperties(rootDir, providers)
+        buildConfigField(
+            "String", "AZURE_SPEECH_KEY",
+            "\"${localProps.getProperty("AZURE_SPEECH_KEY", "")}\""
+        )
     }
 
     buildTypes {
@@ -36,6 +42,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // ← ADD THIS BLOCK: Prevents file conflicts inside the Azure SDK's AAR package

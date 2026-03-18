@@ -72,12 +72,19 @@ enum class AppState { IDLE, LISTENING, SPEAKING }
 
 class TranslatorManager {
 
-    private val SPEECH_KEY    = "YOUR_KEY_1_HERE"   // ← Paste your Azure Key 1 here
-    private val SPEECH_REGION = "southeastasia"      // ← Your Azure region
+    private val SPEECH_KEY = BuildConfig.AZURE_SPEECH_KEY
+    private val SPEECH_REGION = "southeastasia"
 
     private var recognizer: TranslationRecognizer? = null
     private val isSpeaking = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // ── Buffering for long speech segmentation ──────────────
+    private val segmentBuffer = StringBuilder()
+    private var segmentLang: LangOption? = null
+    private var flushRunnable: Runnable? = null
+    private val FLUSH_DELAY_MS = 1750L  // Wait 2s of silence before translating
+    // ────────────────────────────────────────────────────────
 
     fun start(
         langA: LangOption,
@@ -88,15 +95,16 @@ class TranslatorManager {
         try {
             val speechConfig = SpeechTranslationConfig.fromSubscription(SPEECH_KEY, SPEECH_REGION)
 
-            // Extract base language codes (e.g. "en" from "en-US")
             val codeA = langA.locale.split("-")[0]
             val codeB = langB.locale.split("-")[0]
 
-            // Tell Azure to translate into both languages simultaneously
             speechConfig.addTargetLanguage(codeA)
             speechConfig.addTargetLanguage(codeB)
 
-            // Auto-detect which of the two languages is being spoken
+            speechConfig.setProperty(
+                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1500"
+            )
+
             val autoDetect = AutoDetectSourceLanguageConfig.fromLanguages(
                 listOf(langA.locale, langB.locale)
             )
@@ -104,19 +112,31 @@ class TranslatorManager {
             val audioConfig = AudioConfig.fromDefaultMicrophoneInput()
             recognizer = TranslationRecognizer(speechConfig, autoDetect, audioConfig)
 
-            // Fires each time a full sentence is recognised and translated
             recognizer!!.recognized.addEventListener { _, e ->
                 if (e.result.reason == ResultReason.TranslatedSpeech && !isSpeaking.get()) {
 
                     val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
-                    val detectedCode = autoDetectResult.language.split("-")[0] // e.g. "en"
+                    val detectedCode = autoDetectResult.language.split("-")[0]
 
-                    // If speaker used Language A → speak translation in Language B, and vice versa
                     val targetLang = if (detectedCode == codeA) langB else langA
                     val translated = e.result.translations[targetLang.locale.split("-")[0]]
 
                     if (!translated.isNullOrBlank()) {
-                        speakTranslation(translated, targetLang, onStateChange)
+
+                        // If language changed mid-buffer, flush immediately first
+                        if (segmentLang != null && segmentLang != targetLang) {
+                            flushBuffer(onStateChange)
+                        }
+
+                        // Accumulate this segment
+                        segmentLang = targetLang
+                        if (segmentBuffer.isNotEmpty()) segmentBuffer.append(" ")
+                        segmentBuffer.append(translated)
+
+                        // Cancel any pending flush and restart the 2s timer
+                        flushRunnable?.let { mainHandler.removeCallbacks(it) }
+                        flushRunnable = Runnable { flushBuffer(onStateChange) }
+                        mainHandler.postDelayed(flushRunnable!!, FLUSH_DELAY_MS)
                     }
                 }
             }
@@ -136,38 +156,58 @@ class TranslatorManager {
         }
     }
 
+    // Flush the accumulated buffer as a single TTS output
+    private fun flushBuffer(onStateChange: (AppState) -> Unit) {
+        val text = segmentBuffer.toString().trim()
+        val target = segmentLang
+        segmentBuffer.clear()
+        segmentLang = null
+        flushRunnable = null
+        if (text.isNotBlank() && target != null) {
+            speakTranslation(text, target, onStateChange)
+        }
+    }
+
     private fun speakTranslation(
         text: String,
         targetLang: LangOption,
         onStateChange: (AppState) -> Unit
     ) {
         isSpeaking.set(true)
+        recognizer?.stopContinuousRecognitionAsync()
         mainHandler.post { onStateChange(AppState.SPEAKING) }
 
         val ttsConfig = SpeechConfig.fromSubscription(SPEECH_KEY, SPEECH_REGION)
         ttsConfig.speechSynthesisVoiceName = targetLang.voice
 
-        // null AudioConfig = plays through device speaker automatically
-        val synthesizer = SpeechSynthesizer(ttsConfig, null)
+        val speakerAudioConfig = AudioConfig.fromDefaultSpeakerOutput()
+        val synthesizer = SpeechSynthesizer(ttsConfig, speakerAudioConfig)
 
         synthesizer.SynthesisCompleted.addEventListener { _, _ ->
             isSpeaking.set(false)
+            recognizer?.startContinuousRecognitionAsync()
             mainHandler.post { onStateChange(AppState.LISTENING) }
             synthesizer.close()
             ttsConfig.close()
+            speakerAudioConfig.close()
         }
 
         synthesizer.SynthesisCanceled.addEventListener { _, _ ->
             isSpeaking.set(false)
+            recognizer?.startContinuousRecognitionAsync()
             mainHandler.post { onStateChange(AppState.LISTENING) }
             synthesizer.close()
             ttsConfig.close()
+            speakerAudioConfig.close()
         }
 
         synthesizer.SpeakTextAsync(text)
     }
 
     fun stop() {
+        flushRunnable?.let { mainHandler.removeCallbacks(it) }
+        segmentBuffer.clear()
+        segmentLang = null
         recognizer?.stopContinuousRecognitionAsync()
         recognizer?.close()
         recognizer = null
