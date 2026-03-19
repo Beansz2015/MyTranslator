@@ -6,6 +6,7 @@ val LANGUAGES = listOf(
     LangOption("English",             "en-US",  "en-US-JennyNeural"),
     LangOption("Malay",               "ms-MY",  "ms-MY-YasminNeural"),
     LangOption("Chinese (Mandarin)",  "zh-CN",  "zh-CN-XiaoxiaoNeural"),
+    LangOption("Hindi",               "hi-IN",  "hi-IN-SwaraNeural"),
     LangOption("Bengali",             "bn-IN",  "bn-IN-TanishaaNeural"),
     LangOption("Tamil",               "ta-IN",  "ta-IN-PallaviNeural"),
     LangOption("Chinese (Cantonese)", "zh-HK",  "zh-HK-HiuMaanNeural"),
