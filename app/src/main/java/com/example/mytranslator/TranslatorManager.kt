@@ -7,19 +7,6 @@ import com.microsoft.cognitiveservices.speech.audio.AudioConfig
 import com.microsoft.cognitiveservices.speech.translation.*
 import java.util.concurrent.atomic.AtomicBoolean
 
-// Auto-detect shortlist (max 4 per Azure limit, we pick the most common 4 initially,
-// then lock to defaultLang + detectedLang after first foreign utterance)
-val AUTO_DETECT_LANGUAGES = listOf(
-    LANGUAGES.first { it.locale == "en-US" },   // English
-    LANGUAGES.first { it.locale == "ms-MY" },   // Malay
-    LANGUAGES.first { it.locale == "zh-CN" },   // Mandarin
-    LANGUAGES.first { it.locale == "hi-IN" },   // Hindi
-    LANGUAGES.first { it.locale == "th-TH" },   // Thai
-    LANGUAGES.first { it.locale == "bn-IN" },   // Bengali
-    LANGUAGES.first { it.locale == "fil-PH" },  // Filipino
-    LANGUAGES.first { it.locale == "ja-JP" }    // Japanese
-)
-
 class TranslatorManager {
 
     private val SPEECH_KEY    = BuildConfig.AZURE_SPEECH_KEY
@@ -29,17 +16,15 @@ class TranslatorManager {
     private val isSpeaking  = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Segment buffering
     private val segmentBuffer  = StringBuilder()
     private var segmentLang:   LangOption? = null
     private var flushRunnable: Runnable?   = null
-    private val FLUSH_DELAY_MS = 2000L
+    private val FLUSH_DELAY_MS = 1000L
 
-    // Auto-mode state
     private var lastForeignLang: LangOption? = null
 
     // ─────────────────────────────────────────────
-    // MANUAL MODE (Person A + Person B pre-selected)
+    // MANUAL MODE
     // ─────────────────────────────────────────────
 
     fun start(
@@ -55,20 +40,15 @@ class TranslatorManager {
 
             speechConfig.addTargetLanguage(codeA)
             speechConfig.addTargetLanguage(codeB)
-            speechConfig.setProperty(
-                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000"
-            )
+            speechConfig.setProperty(PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000")
 
-            val autoDetect = AutoDetectSourceLanguageConfig.fromLanguages(
-                listOf(langA.locale, langB.locale)
-            )
+            val autoDetect = AutoDetectSourceLanguageConfig.fromLanguages(listOf(langA.locale, langB.locale))
             val audioConfig = AudioConfig.fromDefaultMicrophoneInput()
             recognizer = TranslationRecognizer(speechConfig, autoDetect, audioConfig)
 
             recognizer!!.recognized.addEventListener { _, e ->
                 if (e.result.reason == ResultReason.TranslatedSpeech && !isSpeaking.get()) {
-                    val detectedCode = AutoDetectSourceLanguageResult
-                        .fromResult(e.result).language.split("-")[0]
+                    val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result).language.split("-")[0]
                     val targetLang = if (detectedCode == codeA) langB else langA
                     val translated = e.result.translations[targetLang.locale.split("-")[0]]
 
@@ -100,32 +80,26 @@ class TranslatorManager {
     }
 
     // ─────────────────────────────────────────────
-    // AUTO MODE (default lang + dynamic detection)
+    // AUTO MODE (Dynamically accepts user's shortlist)
     // ─────────────────────────────────────────────
 
     fun startAutoMode(
         defaultLang: LangOption,
+        shortlist: List<LangOption>,
         onStateChange: (AppState) -> Unit,
-        onDetectedLang: (LangOption?) -> Unit,   // notifies UI of the locked foreign lang
+        onDetectedLang: (LangOption?) -> Unit,
         onError: (String) -> Unit
     ) {
         lastForeignLang = null
         onDetectedLang(null)
 
         try {
-            // Start with defaultLang + first 3 non-default candidates (Azure max = 4)
-            val initialCandidates = buildInitialCandidates(defaultLang)
-            startAutoRecognizer(defaultLang, initialCandidates, onStateChange, onDetectedLang, onError)
-
+            // Azure supports up to 10 candidates. Default + up to 9 from shortlist.
+            val candidates = (listOf(defaultLang) + shortlist.filter { it.locale != defaultLang.locale }).take(10)
+            startAutoRecognizer(defaultLang, candidates, onStateChange, onDetectedLang, onError)
         } catch (e: Exception) {
             mainHandler.post { onError("Failed to start: ${e.message}") }
         }
-    }
-
-    private fun buildInitialCandidates(defaultLang: LangOption): List<LangOption> {
-        // defaultLang + up to 3 others from AUTO_DETECT_LANGUAGES shortlist
-        val others = AUTO_DETECT_LANGUAGES.filter { it.locale != defaultLang.locale }.take(3)
-        return listOf(defaultLang) + others
     }
 
     private fun startAutoRecognizer(
@@ -139,17 +113,15 @@ class TranslatorManager {
         recognizer?.close()
 
         val speechConfig = SpeechTranslationConfig.fromSubscription(SPEECH_KEY, SPEECH_REGION)
-
-        // Add target languages for all candidates
         val defaultCode = defaultLang.locale.split("-")[0]
-        candidates.forEach { speechConfig.addTargetLanguage(it.locale.split("-")[0]) }
-        speechConfig.setProperty(
-            PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1500"
-        )
 
-        val autoDetect = AutoDetectSourceLanguageConfig.fromLanguages(
-            candidates.map { it.locale }
-        )
+        candidates.forEach { speechConfig.addTargetLanguage(it.locale.split("-")[0]) }
+        speechConfig.setProperty(PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000")
+
+        // Explicitly set Continuous Language ID mode to allow up to 10 languages
+        speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous")
+
+        val autoDetect = AutoDetectSourceLanguageConfig.fromLanguages(candidates.map { it.locale })
         val audioConfig = AudioConfig.fromDefaultMicrophoneInput()
         recognizer = TranslationRecognizer(speechConfig, autoDetect, audioConfig)
 
@@ -161,21 +133,18 @@ class TranslatorManager {
 
                 val targetLang: LangOption
                 if (isDefaultLang) {
-                    // Staff speaking: translate to last known foreign language
                     targetLang = lastForeignLang ?: return@addEventListener
                 } else {
-                    // Guest speaking: translate to default language
-                    val detected = AUTO_DETECT_LANGUAGES.firstOrNull {
-                        it.locale.split("-")[0] == detectedCode
-                    } ?: return@addEventListener
+                    // FIX: Check full locale first (e.g. zh-HK vs zh-CN), fall back to base code if needed
+                    val detected = candidates.firstOrNull { it.locale == detectedLocale }
+                        ?: candidates.firstOrNull { it.locale.split("-")[0] == detectedCode }
+                        ?: return@addEventListener
 
-                    // Lock in the foreign language if newly detected
                     if (lastForeignLang == null || lastForeignLang!!.locale != detected.locale) {
                         lastForeignLang = detected
                         mainHandler.post { onDetectedLang(detected) }
 
-                        // Re-initialise recognizer locked to just defaultLang ↔ detectedLang
-                        // for better accuracy and speed going forward
+                        // Lock language pair
                         mainHandler.post {
                             startAutoRecognizer(
                                 defaultLang    = defaultLang,
@@ -185,7 +154,6 @@ class TranslatorManager {
                                 onError        = onError
                             )
                         }
-                        // Still process this utterance with what we have
                     }
                     targetLang = defaultLang
                 }
@@ -213,10 +181,6 @@ class TranslatorManager {
         recognizer!!.startContinuousRecognitionAsync()
         mainHandler.post { onStateChange(AppState.LISTENING) }
     }
-
-    // ─────────────────────────────────────────────
-    // SHARED
-    // ─────────────────────────────────────────────
 
     private fun flushBuffer(onStateChange: (AppState) -> Unit) {
         val text   = segmentBuffer.toString().trim()
@@ -258,7 +222,7 @@ class TranslatorManager {
         flushRunnable?.let { mainHandler.removeCallbacks(it) }
         segmentBuffer.clear()
         segmentLang      = null
-        lastForeignLang  = null   // auto-reset on Stop
+        lastForeignLang  = null
         recognizer?.stopContinuousRecognitionAsync()
         recognizer?.close()
         recognizer = null
