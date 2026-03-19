@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,13 +41,8 @@ fun TranslatorScreen(
     var showSettings    by remember { mutableStateOf(false) }
 
     // Your requested initial 8 languages
-    var autoCandidates by remember {
-        mutableStateOf(
-            LANGUAGES.filter {
-                it.name in listOf("English", "Malay", "Chinese (Mandarin)", "Hindi", "Thai", "Bengali", "Filipino", "Japanese")
-            }
-        )
-    }
+    val context = LocalContext.current
+    var autoCandidates by remember { mutableStateOf(ShortlistPrefs.load(context)) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -110,11 +106,13 @@ fun TranslatorScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        if (isSelected) {
-                                            if (autoCandidates.size > 1) autoCandidates = autoCandidates - lang
+                                        val updated = if (isSelected) {
+                                            if (autoCandidates.size > 1) autoCandidates - lang else autoCandidates
                                         } else {
-                                            if (autoCandidates.size < 10) autoCandidates = autoCandidates + lang
+                                            if (autoCandidates.size < 10) autoCandidates + lang else autoCandidates
                                         }
+                                        autoCandidates = updated
+                                        ShortlistPrefs.save(context, updated)   // persist immediately on every tick
                                     }
                                     .padding(vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
