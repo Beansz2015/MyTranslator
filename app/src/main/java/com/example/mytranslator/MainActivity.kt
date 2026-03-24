@@ -21,6 +21,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Pre-warm the WebSocket connection immediately on launch
+        val defaultLangA     = LANGUAGES.first { it.locale == "en-US" }
+        val defaultLangB     = LANGUAGES.first { it.locale == "zh-CN" }
+        val defaultShortlist = ShortlistPrefs.load(this)
+        translatorManager.preWarm(defaultLangA, defaultLangB, defaultShortlist)
+
         setContent {
             MyTranslatorTheme {
                 TranslatorScreen(
@@ -40,6 +47,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        translatorManager.stop()
+        translatorManager.destroy()   // full teardown only here
     }
 }

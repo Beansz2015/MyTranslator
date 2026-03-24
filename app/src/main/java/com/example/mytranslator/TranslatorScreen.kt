@@ -16,11 +16,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,25 +29,27 @@ fun TranslatorScreen(
     onRequestPermission: () -> Unit,
     hasMicPermission: () -> Boolean
 ) {
-    var langA           by remember { mutableStateOf(LANGUAGES[0]) }
-    // Default to Chinese (Mandarin) for Person B
-    var langB           by remember { mutableStateOf(LANGUAGES.first { it.name == "Chinese (Mandarin)" }) }
-    var appState        by remember { mutableStateOf(AppState.IDLE) }
-    var errorMessage    by remember { mutableStateOf<String?>(null) }
-    var expandedA       by remember { mutableStateOf(false) }
-    var expandedB       by remember { mutableStateOf(false) }
-    var autoMode        by remember { mutableStateOf(false) }
-    var detectedLang    by remember { mutableStateOf<LangOption?>(null) }
-    var showSettings    by remember { mutableStateOf(false) }
+    var langA        by remember { mutableStateOf(LANGUAGES.first { it.locale == "en-US" }) }
+    var langB        by remember { mutableStateOf(LANGUAGES.first { it.locale == "zh-CN" }) }
+    var appState     by remember { mutableStateOf(AppState.IDLE) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var expandedA    by remember { mutableStateOf(false) }
+    var expandedB    by remember { mutableStateOf(false) }
+    var autoMode     by remember { mutableStateOf(false) }
+    var detectedLang by remember { mutableStateOf<LangOption?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
 
-    // Your requested initial 8 languages
     val context = LocalContext.current
     var autoCandidates by remember { mutableStateOf(ShortlistPrefs.load(context)) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
-        initialValue  = 1f, targetValue   = 1.35f,
-        animationSpec = infiniteRepeatable(animation = tween(700, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
+        initialValue  = 1f,
+        targetValue   = 1.35f,
+        animationSpec = infiniteRepeatable(
+            animation  = tween(700, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
         label = "scale"
     )
 
@@ -64,38 +66,54 @@ fun TranslatorScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             AutoModeToggle(
-                autoMode = autoMode,
-                enabled  = appState == AppState.IDLE,
-                onToggle = { autoMode = it; detectedLang = null },
+                autoMode       = autoMode,
+                enabled        = appState == AppState.IDLE,
+                onToggle       = { autoMode = it; detectedLang = null },
                 onOpenSettings = { showSettings = true }
             )
 
             LanguageSelectors(
-                langA = langA, langB = langB, appState = appState, autoMode = autoMode,
-                detectedLang = detectedLang, onLangA = { langA = it }, onLangB = { langB = it },
-                expandedA = expandedA, expandedB = expandedB, onExpandA = { expandedA = it }, onExpandB = { expandedB = it }
+                langA        = langA, langB = langB,
+                appState     = appState, autoMode = autoMode,
+                detectedLang = detectedLang,
+                onLangA      = { langA = it }, onLangB = { langB = it },
+                expandedA    = expandedA, expandedB = expandedB,
+                onExpandA    = { expandedA = it }, onExpandB = { expandedB = it }
             )
 
             StatusIndicator(appState = appState, pulseScale = pulseScale)
 
-            errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp) }
+            errorMessage?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
+            }
 
             StartStopButton(
-                appState = appState, hasMicPermission = hasMicPermission, onRequestPermission = onRequestPermission,
-                autoMode = autoMode, autoCandidates = autoCandidates, langA = langA, langB = langB,
-                translatorManager = translatorManager, onStateChange = { appState = it },
-                onDetectedLang = { detectedLang = it }, onError = { errorMessage = it }, onClearError = { errorMessage = null }
+                appState            = appState,
+                hasMicPermission    = hasMicPermission,
+                onRequestPermission = onRequestPermission,
+                autoMode            = autoMode,
+                autoCandidates      = autoCandidates,
+                langA               = langA, langB = langB,
+                translatorManager   = translatorManager,
+                onStateChange       = { appState = it },
+                onDetectedLang      = { detectedLang = it },
+                onError             = { errorMessage = it },
+                onClearError        = { errorMessage = null }
             )
         }
 
-        // Settings Dialog for picking up to 10 candidates
+        // ── Settings Dialog ───────────────────────────────────────────────────
         if (showSettings) {
             AlertDialog(
                 onDismissRequest = { showSettings = false },
                 title = {
                     Column {
                         Text("Auto-Detect Shortlist")
-                        Text("Select up to 10 languages", fontSize = 13.sp, color = Color.Gray)
+                        Text(
+                            "Select up to 10 languages (${autoCandidates.size}/10 selected)",
+                            fontSize = 13.sp,
+                            color    = Color.Gray
+                        )
                     }
                 },
                 text = {
@@ -112,7 +130,14 @@ fun TranslatorScreen(
                                             if (autoCandidates.size < 10) autoCandidates + lang else autoCandidates
                                         }
                                         autoCandidates = updated
-                                        ShortlistPrefs.save(context, updated)   // persist immediately on every tick
+                                        ShortlistPrefs.save(context, updated)
+                                        // Silently pre-warm in background with updated shortlist
+                                        if (appState == AppState.IDLE) {
+                                            translatorManager.preWarmAutoMode(
+                                                defaultLang = langA,
+                                                shortlist   = updated
+                                            )
+                                        }
                                     }
                                     .padding(vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -132,6 +157,8 @@ fun TranslatorScreen(
     }
 }
 
+// ── Auto Mode Toggle ──────────────────────────────────────────────────────────
+
 @Composable
 private fun AutoModeToggle(
     autoMode: Boolean, enabled: Boolean,
@@ -149,57 +176,107 @@ private fun AutoModeToggle(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-            Text("Auto-Detect Mode", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = if (autoMode) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(if (autoMode) "Auto-translate guest language" else "Manual selection", fontSize = 12.sp, color = if (autoMode) Color(0xFFB9F6CA) else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "Auto-Detect Mode",
+                fontWeight = FontWeight.SemiBold,
+                fontSize   = 15.sp,
+                color      = if (autoMode) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                if (autoMode) "Auto-translate guest language" else "Manual selection",
+                fontSize = 12.sp,
+                color    = if (autoMode) Color(0xFFB9F6CA) else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-
         if (autoMode) {
-            IconButton(onClick = onOpenSettings, enabled = enabled, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.White, modifier = Modifier.size(22.dp))
+            IconButton(
+                onClick  = onOpenSettings,
+                enabled  = enabled,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = "Settings",
+                    tint     = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
             }
             Spacer(Modifier.width(4.dp))
         }
-        Switch(checked = autoMode, onCheckedChange = { if (enabled) onToggle(it) }, enabled = enabled)
+        Switch(
+            checked         = autoMode,
+            onCheckedChange = { if (enabled) onToggle(it) },
+            enabled         = enabled
+        )
     }
 }
+
+// ── Language Selectors ────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LanguageSelectors(
-    langA: LangOption, langB: LangOption, appState: AppState, autoMode: Boolean,
-    detectedLang: LangOption?, onLangA: (LangOption) -> Unit, onLangB: (LangOption) -> Unit,
-    expandedA: Boolean, expandedB: Boolean, onExpandA: (Boolean) -> Unit, onExpandB: (Boolean) -> Unit
+    langA: LangOption, langB: LangOption,
+    appState: AppState, autoMode: Boolean,
+    detectedLang: LangOption?,
+    onLangA: (LangOption) -> Unit, onLangB: (LangOption) -> Unit,
+    expandedA: Boolean, expandedB: Boolean,
+    onExpandA: (Boolean) -> Unit, onExpandB: (Boolean) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(if (autoMode) "Default Language (your staff's language)" else "Select Languages", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-
-        LangDropdown(label = if (autoMode) "Default language" else "Person A speaks", selected = langA, expanded = expandedA, enabled = appState == AppState.IDLE, onExpand = onExpandA, onSelect = onLangA)
-
+        Text(
+            if (autoMode) "Default Language (your staff's language)" else "Select Languages",
+            fontWeight = FontWeight.SemiBold,
+            fontSize   = 17.sp
+        )
+        LangDropdown(
+            label    = if (autoMode) "Default language" else "Person A speaks",
+            selected = langA,
+            expanded = expandedA,
+            enabled  = appState == AppState.IDLE,
+            onExpand = onExpandA,
+            onSelect = onLangA
+        )
         if (autoMode) {
             if (detectedLang == null) {
                 OutlinedTextField(
-                    value = "Waiting for guest...", onValueChange = {},
-                    readOnly = true, enabled = false,
-                    label = { Text("Guest language (auto-detected)") },
-                    modifier = Modifier.fillMaxWidth()
+                    value         = "Waiting for guest...",
+                    onValueChange = {},
+                    readOnly      = true,
+                    enabled       = false,
+                    label         = { Text("Guest language (auto-detected)") },
+                    modifier      = Modifier.fillMaxWidth()
                 )
             } else {
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        contentColor   = MaterialTheme.colorScheme.onSecondaryContainer
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Detected Guest Language", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f))
+                        Text(
+                            "Detected Guest Language",
+                            fontSize = 13.sp,
+                            color    = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                        )
                         Spacer(Modifier.height(2.dp))
                         Text(detectedLang.name, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
         } else {
-            LangDropdown(label = "Person B speaks", selected = langB, expanded = expandedB, enabled = appState == AppState.IDLE, onExpand = onExpandB, onSelect = onLangB)
+            LangDropdown(
+                label    = "Person B speaks",
+                selected = langB,
+                expanded = expandedB,
+                enabled  = appState == AppState.IDLE,
+                onExpand = onExpandB,
+                onSelect = onLangB
+            )
         }
     }
 }
@@ -212,64 +289,121 @@ private fun LangDropdown(
 ) {
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { if (enabled) onExpand(it) }) {
         OutlinedTextField(
-            value = selected.name, onValueChange = {}, readOnly = true, label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+            value         = selected.name,
+            onValueChange = {},
+            readOnly      = true,
+            label         = { Text(label) },
+            trailingIcon  = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier      = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { onExpand(false) }) {
-            LANGUAGES.forEach { lang -> DropdownMenuItem(text = { Text(lang.name) }, onClick = { onSelect(lang); onExpand(false) }) }
+            LANGUAGES.forEach { lang ->
+                DropdownMenuItem(
+                    text    = { Text(lang.name) },
+                    onClick = { onSelect(lang); onExpand(false) }
+                )
+            }
         }
     }
 }
 
+// ── Status Indicator ──────────────────────────────────────────────────────────
+
 @Composable
 private fun StatusIndicator(appState: AppState, pulseScale: Float) {
-    Box(modifier = Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier         = Modifier.fillMaxWidth().height(160.dp),
+        contentAlignment = Alignment.Center
+    ) {
         when (appState) {
             AppState.IDLE -> Text("Ready. Press Start.", color = Color.Gray, fontSize = 16.sp)
             AppState.LISTENING -> {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.scale(pulseScale).size(80.dp).background(Color(0xFF4CAF50), androidx.compose.foundation.shape.CircleShape))
+                    Box(
+                        Modifier.scale(pulseScale).size(80.dp)
+                            .background(Color(0xFF4CAF50), androidx.compose.foundation.shape.CircleShape)
+                    )
                     Spacer(Modifier.height(16.dp))
-                    Text("Listening…", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "Listening…",
+                        color      = Color(0xFF4CAF50),
+                        fontWeight = FontWeight.Bold,
+                        fontSize   = 16.sp
+                    )
                 }
             }
             AppState.SPEAKING -> {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(80.dp).background(Color(0xFF2196F3), androidx.compose.foundation.shape.CircleShape))
+                    Box(
+                        Modifier.size(80.dp)
+                            .background(Color(0xFF2196F3), androidx.compose.foundation.shape.CircleShape)
+                    )
                     Spacer(Modifier.height(16.dp))
-                    Text("Speaking translation…", color = Color(0xFF2196F3), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "Speaking translation…",
+                        color      = Color(0xFF2196F3),
+                        fontWeight = FontWeight.Bold,
+                        fontSize   = 16.sp
+                    )
                 }
             }
         }
     }
 }
 
+// ── Start / Stop Button ───────────────────────────────────────────────────────
+
 @Composable
 private fun StartStopButton(
-    appState: AppState, hasMicPermission: () -> Boolean, onRequestPermission: () -> Unit,
-    autoMode: Boolean, autoCandidates: List<LangOption>,
-    langA: LangOption, langB: LangOption, translatorManager: TranslatorManager,
-    onStateChange: (AppState) -> Unit, onDetectedLang: (LangOption?) -> Unit,
-    onError: (String) -> Unit, onClearError: () -> Unit
+    appState: AppState,
+    hasMicPermission: () -> Boolean,
+    onRequestPermission: () -> Unit,
+    autoMode: Boolean,
+    autoCandidates: List<LangOption>,
+    langA: LangOption, langB: LangOption,
+    translatorManager: TranslatorManager,
+    onStateChange: (AppState) -> Unit,
+    onDetectedLang: (LangOption?) -> Unit,
+    onError: (String) -> Unit,
+    onClearError: () -> Unit
 ) {
     Button(
         onClick = {
             onClearError()
             when {
-                appState != AppState.IDLE -> { translatorManager.stop(); onDetectedLang(null); onStateChange(AppState.IDLE) }
+                appState != AppState.IDLE -> {
+                    translatorManager.stop()
+                    onDetectedLang(null)
+                    onStateChange(AppState.IDLE)
+                }
                 !hasMicPermission() -> onRequestPermission()
                 !autoMode && langA == langB -> onError("Please select two different languages.")
                 autoMode -> translatorManager.startAutoMode(
-                    defaultLang = langA, shortlist = autoCandidates,
-                    onStateChange = onStateChange, onDetectedLang = onDetectedLang, onError = onError
+                    defaultLangIn  = langA,
+                    shortlist      = autoCandidates,
+                    onStateChange  = onStateChange,
+                    onDetectedLang = onDetectedLang,
+                    onError        = onError
                 )
-                else -> translatorManager.start(langA = langA, langB = langB, onStateChange = onStateChange, onError = onError)
+                else -> translatorManager.start(
+                    langA         = langA,
+                    langB         = langB,
+                    onStateChange = onStateChange,
+                    onError       = onError
+                )
             }
         },
-        colors = ButtonDefaults.buttonColors(containerColor = if (appState == AppState.IDLE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (appState == AppState.IDLE)
+                MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+        ),
         modifier = Modifier.fillMaxWidth().height(56.dp)
     ) {
-        Text(text = if (appState == AppState.IDLE) "▶  Start Conversation" else "■  Stop", fontSize = 18.sp)
+        Text(
+            text     = if (appState == AppState.IDLE) "▶  Start Conversation" else "■  Stop",
+            fontSize = 18.sp
+        )
     }
 }
