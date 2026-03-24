@@ -141,9 +141,6 @@ class TranslatorManager {
             speechConfig.setProperty(
                 PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "900"
             )
-            speechConfig.setProperty(
-                PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000"
-            )
             speechConfig.setProperty("speech.segmentation.mode", "custom")
             speechConfig.setProperty("speech.segmentation.sentenceTimeoutMs", "750")
 
@@ -179,8 +176,12 @@ class TranslatorManager {
             val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result)
                 .language.split("-")[0]
             val targetLang   = if (detectedCode == codeA) langB else langA
-            val translated   = e.result.translations[targetLang.locale.split("-")[0]]
+            val targetCode   = targetLang.locale.split("-")[0]
 
+            // Echo guard: if Azure detected the same language as the target, it misidentified—discard
+            if (detectedCode == targetCode) return@addEventListener
+
+            val translated = e.result.translations[targetCode]
             if (!translated.isNullOrBlank()) {
                 if (segmentLang != null && segmentLang != targetLang) flushBuffer()
                 segmentLang = targetLang
@@ -260,9 +261,6 @@ class TranslatorManager {
             speechConfig.setProperty(
                 PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "900"
             )
-            speechConfig.setProperty(
-                PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000"
-            )
             speechConfig.setProperty("speech.segmentation.mode", "custom")
             speechConfig.setProperty("speech.segmentation.sentenceTimeoutMs", "750")
             speechConfig.setProperty(
@@ -328,7 +326,12 @@ class TranslatorManager {
                 targetLang = defaultLangIn
             }
 
-            val translated = e.result.translations[targetLang.locale.split("-")[0]]
+            val targetCode = targetLang.locale.split("-")[0]
+
+            // Echo guard: if detected language == target language, Azure misidentified—discard
+            if (detectedCode == targetCode) return@addEventListener
+
+            val translated = e.result.translations[targetCode]
             if (!translated.isNullOrBlank()) {
                 if (segmentLang != null && segmentLang != targetLang) flushBuffer()
                 segmentLang = targetLang
