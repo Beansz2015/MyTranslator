@@ -6,6 +6,7 @@ import com.microsoft.cognitiveservices.speech.*
 import com.microsoft.cognitiveservices.speech.audio.AudioConfig
 import com.microsoft.cognitiveservices.speech.translation.*
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
 
 class TranslatorManager {
 
@@ -14,34 +15,55 @@ class TranslatorManager {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // ── Warm connection state ─────────────────────────────────────────────────
+    // ── Thread safety ───────────────────────────────────────────────────────
+    // All recognizer create/close operations must hold this lock
+    private val recognizerLock = ReentrantLock()
+
+    // ── Warm connection state ────────────────────────────────────────────────
     private var recognizer:    TranslationRecognizer? = null
+    private var isWarmReady:   Boolean = false   // true only after build fully completes
     private var warmLangA:     LangOption? = null
     private var warmLangB:     LangOption? = null
     private var warmAutoMode:  Boolean = false
     private var warmShortlist: List<LangOption> = emptyList()
 
-    // ── Session state (active conversation) ──────────────────────────────────
+    // ── Session state ─────────────────────────────────────────────────────────
     private val isActive   = AtomicBoolean(false)
     private val isSpeaking = AtomicBoolean(false)
 
-    // Callbacks forwarded to UI while active
     private var activeOnStateChange:  ((AppState) -> Unit)? = null
     private var activeOnDetectedLang: ((LangOption?) -> Unit)? = null
     private var activeOnError:        ((String) -> Unit)? = null
 
-    // Segment buffering
+    // ── Segment buffering ───────────────────────────────────────────────────
     private val segmentBuffer  = StringBuilder()
     private var segmentLang:   LangOption? = null
     private var flushRunnable: Runnable?   = null
     private val FLUSH_DELAY_MS = 1000L
 
-    // Auto-mode runtime state
-    private var defaultLang:     LangOption? = null
+    // ── Auto-mode runtime ─────────────────────────────────────────────────────
     private var lastForeignLang: LangOption? = null
 
     // ─────────────────────────────────────────────────────────────────────────
-    // PRE-WARM — call once on app launch with default settings
+    // SAFE TEARDOWN — always call this instead of close() directly
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun teardownRecognizer() {
+        recognizerLock.lock()
+        try {
+            isWarmReady = false
+            recognizer?.stopContinuousRecognitionAsync()
+            recognizer?.close()
+            recognizer = null
+        } catch (e: Exception) {
+            // Swallow — teardown is best-effort
+        } finally {
+            recognizerLock.unlock()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PRE-WARM — called once on app launch with manual mode defaults
     // ─────────────────────────────────────────────────────────────────────────
 
     fun preWarm(
@@ -49,29 +71,29 @@ class TranslatorManager {
         langB: LangOption,
         shortlist: List<LangOption>
     ) {
-        Thread {
-            buildManualRecognizer(langA, langB)
-        }.start()
         warmLangA     = langA
         warmLangB     = langB
         warmAutoMode  = false
         warmShortlist = shortlist
+        Thread { buildManualRecognizer(langA, langB) }.start()
     }
 
-    // Pre-warm auto mode in background when shortlist changes in Settings dialog
+    // ─────────────────────────────────────────────────────────────────────────
+    // PRE-WARM AUTO — called when shortlist changes in Settings dialog
+    // ─────────────────────────────────────────────────────────────────────────
+
     fun preWarmAutoMode(
         defaultLang: LangOption,
         shortlist: List<LangOption>
     ) {
+        warmLangA     = defaultLang
+        warmAutoMode  = true
+        warmShortlist = shortlist
         Thread {
-            recognizer?.stopContinuousRecognitionAsync()
-            recognizer?.close()
-            recognizer = null
-            val candidates = (listOf(defaultLang) + shortlist.filter { it.locale != defaultLang.locale }).take(10)
+            teardownRecognizer()
+            val candidates = (listOf(defaultLang) +
+                shortlist.filter { it.locale != defaultLang.locale }).take(10)
             buildAutoRecognizer(defaultLang, candidates)
-            warmLangA     = defaultLang
-            warmAutoMode  = true
-            warmShortlist = shortlist
         }.start()
     }
 
@@ -86,27 +108,34 @@ class TranslatorManager {
         onError: (String) -> Unit
     ) {
         val settingsChanged = langA != warmLangA || langB != warmLangB || warmAutoMode
-        if (settingsChanged) {
-            recognizer?.stopContinuousRecognitionAsync()
-            recognizer?.close()
-            recognizer = null
-            buildManualRecognizer(langA, langB)
-            warmLangA    = langA
-            warmLangB    = langB
-            warmAutoMode = false
+
+        if (settingsChanged || !isWarmReady) {
+            activeOnStateChange  = onStateChange
+            activeOnDetectedLang = null
+            activeOnError        = onError
+            Thread {
+                if (settingsChanged) {
+                    teardownRecognizer()
+                    warmLangA    = langA
+                    warmLangB    = langB
+                    warmAutoMode = false
+                }
+                buildManualRecognizer(langA, langB)
+                activateSession(onStateChange)
+            }.start()
+        } else {
+            // Warm and ready — activate immediately, zero rebuild
+            activeOnStateChange  = onStateChange
+            activeOnDetectedLang = null
+            activeOnError        = onError
+            lastForeignLang      = null
+            isActive.set(true)
+            mainHandler.post { onStateChange(AppState.LISTENING) }
         }
-
-        activeOnStateChange  = onStateChange
-        activeOnDetectedLang = null
-        activeOnError        = onError
-        defaultLang          = null
-        lastForeignLang      = null
-
-        isActive.set(true)
-        mainHandler.post { onStateChange(AppState.LISTENING) }
     }
 
     private fun buildManualRecognizer(langA: LangOption, langB: LangOption) {
+        recognizerLock.lock()
         try {
             val speechConfig = SpeechTranslationConfig.fromSubscription(SPEECH_KEY, SPEECH_REGION)
             val codeA = langA.locale.split("-")[0]
@@ -114,18 +143,25 @@ class TranslatorManager {
 
             speechConfig.addTargetLanguage(codeA)
             speechConfig.addTargetLanguage(codeB)
-            speechConfig.setProperty(PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000")
+            speechConfig.setProperty(
+                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000"
+            )
 
-            val autoDetect  = AutoDetectSourceLanguageConfig.fromLanguages(listOf(langA.locale, langB.locale))
+            val autoDetect  = AutoDetectSourceLanguageConfig.fromLanguages(
+                listOf(langA.locale, langB.locale)
+            )
             val audioConfig = AudioConfig.fromDefaultMicrophoneInput()
             val newRecognizer = TranslationRecognizer(speechConfig, autoDetect, audioConfig)
 
             attachManualListeners(newRecognizer, langA, langB)
             newRecognizer.startContinuousRecognitionAsync()
-            recognizer = newRecognizer
+            recognizer  = newRecognizer
+            isWarmReady = true  // build complete; safe to activate
 
         } catch (e: Exception) {
             mainHandler.post { activeOnError?.invoke("Failed to initialise: ${e.message}") }
+        } finally {
+            recognizerLock.unlock()
         }
     }
 
@@ -140,7 +176,8 @@ class TranslatorManager {
             if (!isActive.get() || isSpeaking.get()) return@addEventListener
             if (e.result.reason != ResultReason.TranslatedSpeech) return@addEventListener
 
-            val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result).language.split("-")[0]
+            val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result)
+                .language.split("-")[0]
             val targetLang   = if (detectedCode == codeA) langB else langA
             val translated   = e.result.translations[targetLang.locale.split("-")[0]]
 
@@ -177,50 +214,75 @@ class TranslatorManager {
         onDetectedLang: (LangOption?) -> Unit,
         onError: (String) -> Unit
     ) {
-        val settingsChanged = !warmAutoMode || defaultLangIn != warmLangA || shortlist != warmShortlist
-        if (settingsChanged) {
-            recognizer?.stopContinuousRecognitionAsync()
-            recognizer?.close()
-            recognizer = null
-            val candidates = (listOf(defaultLangIn) + shortlist.filter { it.locale != defaultLangIn.locale }).take(10)
-            buildAutoRecognizer(defaultLangIn, candidates)
-            warmLangA     = defaultLangIn
-            warmAutoMode  = true
-            warmShortlist = shortlist
+        val settingsChanged = !warmAutoMode ||
+            defaultLangIn != warmLangA ||
+            shortlist != warmShortlist
+
+        if (settingsChanged || !isWarmReady) {
+            activeOnStateChange  = onStateChange
+            activeOnDetectedLang = onDetectedLang
+            activeOnError        = onError
+            onDetectedLang(null)
+            Thread {
+                if (settingsChanged) {
+                    teardownRecognizer()
+                    warmLangA     = defaultLangIn
+                    warmAutoMode  = true
+                    warmShortlist = shortlist
+                }
+                val candidates = (listOf(defaultLangIn) +
+                    shortlist.filter { it.locale != defaultLangIn.locale }).take(10)
+                buildAutoRecognizer(defaultLangIn, candidates)
+                activateSession(onStateChange)
+            }.start()
+        } else {
+            // Warm and ready — activate immediately, zero rebuild
+            activeOnStateChange  = onStateChange
+            activeOnDetectedLang = onDetectedLang
+            activeOnError        = onError
+            lastForeignLang      = null
+            onDetectedLang(null)
+            isActive.set(true)
+            mainHandler.post { onStateChange(AppState.LISTENING) }
         }
-
-        activeOnStateChange  = onStateChange
-        activeOnDetectedLang = onDetectedLang
-        activeOnError        = onError
-        defaultLang          = defaultLangIn
-        lastForeignLang      = null
-        onDetectedLang(null)
-
-        isActive.set(true)
-        mainHandler.post { onStateChange(AppState.LISTENING) }
     }
 
     private fun buildAutoRecognizer(
         defaultLangIn: LangOption,
         candidates: List<LangOption>
     ) {
+        recognizerLock.lock()
         try {
             val speechConfig = SpeechTranslationConfig.fromSubscription(SPEECH_KEY, SPEECH_REGION)
 
             candidates.forEach { speechConfig.addTargetLanguage(it.locale.split("-")[0]) }
-            speechConfig.setProperty(PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000")
-            speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous")
+            speechConfig.setProperty(
+                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000"
+            )
+            speechConfig.setProperty(
+                PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous"
+            )
 
-            val autoDetect  = AutoDetectSourceLanguageConfig.fromLanguages(candidates.map { it.locale })
+            val autoDetect  = AutoDetectSourceLanguageConfig.fromLanguages(
+                candidates.map { it.locale }
+            )
             val audioConfig = AudioConfig.fromDefaultMicrophoneInput()
             val newRecognizer = TranslationRecognizer(speechConfig, autoDetect, audioConfig)
 
-            attachAutoListeners(newRecognizer, defaultLangIn, defaultLangIn.locale.split("-")[0], candidates)
+            attachAutoListeners(
+                newRecognizer,
+                defaultLangIn,
+                defaultLangIn.locale.split("-")[0],
+                candidates
+            )
             newRecognizer.startContinuousRecognitionAsync()
-            recognizer = newRecognizer
+            recognizer  = newRecognizer
+            isWarmReady = true  // build complete; safe to activate
 
         } catch (e: Exception) {
             mainHandler.post { activeOnError?.invoke("Failed to initialise: ${e.message}") }
+        } finally {
+            recognizerLock.unlock()
         }
     }
 
@@ -250,14 +312,13 @@ class TranslatorManager {
                     lastForeignLang = detected
                     mainHandler.post { activeOnDetectedLang?.invoke(detected) }
 
-                    // Lock to 2-language pair for subsequent utterances
-                    mainHandler.post {
+                    // Lock to 2-language pair — rebuild safely on background thread
+                    Thread {
                         if (isActive.get()) {
-                            recognizer?.stopContinuousRecognitionAsync()
-                            recognizer?.close()
+                            teardownRecognizer()
                             buildAutoRecognizer(defaultLangIn, listOf(defaultLangIn, detected))
                         }
-                    }
+                    }.start()
                 }
                 targetLang = defaultLangIn
             }
@@ -286,8 +347,15 @@ class TranslatorManager {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // SHARED
+    // SHARED HELPERS
     // ─────────────────────────────────────────────────────────────────────────
+
+    // Called from background thread after build completes to activate the session
+    private fun activateSession(onStateChange: (AppState) -> Unit) {
+        lastForeignLang = null
+        isActive.set(true)
+        mainHandler.post { onStateChange(AppState.LISTENING) }
+    }
 
     private fun flushBuffer() {
         val text   = segmentBuffer.toString().trim()
@@ -321,7 +389,7 @@ class TranslatorManager {
         synthesizer.SpeakTextAsync(text)
     }
 
-    // Stop conversation but keep WebSocket alive
+    // Stop conversation — keeps WebSocket alive
     fun stop() {
         isActive.set(false)
         flushRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -335,11 +403,9 @@ class TranslatorManager {
         // Recognizer stays alive — WebSocket remains warm
     }
 
-    // Full teardown — call from onDestroy() only
+    // Full teardown — onDestroy() only
     fun destroy() {
         stop()
-        recognizer?.stopContinuousRecognitionAsync()
-        recognizer?.close()
-        recognizer = null
+        teardownRecognizer()
     }
 }
