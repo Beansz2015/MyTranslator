@@ -139,10 +139,13 @@ class TranslatorManager {
 
             // ── Silence + segmentation tuning ───────────────────────────────────
             speechConfig.setProperty(
-                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "800"
+                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "900"
+            )
+            speechConfig.setProperty(
+                PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000"
             )
             speechConfig.setProperty("speech.segmentation.mode", "custom")
-            speechConfig.setProperty("speech.segmentation.sentenceTimeoutMs", "600")
+            speechConfig.setProperty("speech.segmentation.sentenceTimeoutMs", "750")
 
             val autoDetect  = AutoDetectSourceLanguageConfig.fromLanguages(
                 listOf(langA.locale, langB.locale)
@@ -255,10 +258,13 @@ class TranslatorManager {
 
             // ── Silence + segmentation tuning ───────────────────────────────────
             speechConfig.setProperty(
-                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "800"
+                PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "900"
+            )
+            speechConfig.setProperty(
+                PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000"
             )
             speechConfig.setProperty("speech.segmentation.mode", "custom")
-            speechConfig.setProperty("speech.segmentation.sentenceTimeoutMs", "600")
+            speechConfig.setProperty("speech.segmentation.sentenceTimeoutMs", "750")
             speechConfig.setProperty(
                 PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous"
             )
