@@ -44,6 +44,8 @@ class TranslatorManager {
     private var lastForeignLang: LangOption? = null
 
     // ── Detection streak guard ────────────────────────────────────────────────
+    // Only meaningful with 3+ candidate languages (broad auto-mode scan).
+    // With 2 languages, alternation is always expected — guard is disabled.
     private val detectionHistory = ArrayDeque<String>(5)
     private val HISTORY_MAX = 5
 
@@ -52,7 +54,8 @@ class TranslatorManager {
         detectionHistory.addLast(code)
     }
 
-    private fun isLikelyMisdetection(newCode: String): Boolean {
+    private fun isLikelyMisdetection(newCode: String, candidateCount: Int): Boolean {
+        if (candidateCount <= 2) return false   // alternation is normal with 2 languages
         if (detectionHistory.size < 3) return false
         val recentMajority = detectionHistory.takeLast(3)
             .groupingBy { it }.eachCount()
@@ -193,8 +196,8 @@ class TranslatorManager {
             val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result)
                 .language.split("-")[0]
 
-            // Streak guard — discard implausible sudden language flip
-            if (isLikelyMisdetection(detectedCode)) return@addEventListener
+            // Streak guard — disabled for 2-language mode (candidateCount = 2)
+            if (isLikelyMisdetection(detectedCode, 2)) return@addEventListener
             recordDetection(detectedCode)
 
             val targetLang = if (detectedCode == codeA) langB else langA
@@ -330,8 +333,8 @@ class TranslatorManager {
             val detectedLocale = AutoDetectSourceLanguageResult.fromResult(e.result).language
             val detectedCode   = detectedLocale.split("-")[0]
 
-            // Streak guard — discard implausible sudden language flip
-            if (isLikelyMisdetection(detectedCode)) return@addEventListener
+            // Streak guard — only active for broad scan (3+ candidates)
+            if (isLikelyMisdetection(detectedCode, candidates.size)) return@addEventListener
             recordDetection(detectedCode)
 
             val isDefault = detectedCode == defaultCode
@@ -351,8 +354,6 @@ class TranslatorManager {
                     Thread {
                         if (isActive.get()) {
                             teardownRecognizer()
-                            // Clear history so the streak guard doesn't block the default
-                            // language on the freshly narrowed 2-language recognizer
                             detectionHistory.clear()
                             buildAutoRecognizer(defaultLangIn, listOf(defaultLangIn, detected))
                         }
