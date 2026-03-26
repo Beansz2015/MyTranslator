@@ -44,7 +44,6 @@ class TranslatorManager {
     private var lastForeignLang: LangOption? = null
 
     // ── Detection streak guard ────────────────────────────────────────────────
-    // Tracks the last N detected language codes to catch sudden implausible flips
     private val detectionHistory = ArrayDeque<String>(5)
     private val HISTORY_MAX = 5
 
@@ -53,14 +52,11 @@ class TranslatorManager {
         detectionHistory.addLast(code)
     }
 
-    // Returns true if newCode is likely a misdetection based on recent history.
-    // Requires at least 3 history entries before making a judgment.
     private fun isLikelyMisdetection(newCode: String): Boolean {
         if (detectionHistory.size < 3) return false
         val recentMajority = detectionHistory.takeLast(3)
             .groupingBy { it }.eachCount()
             .maxByOrNull { it.value }?.key
-        // Suspicious if both the last detected AND the majority disagree with newCode
         return recentMajority != newCode && detectionHistory.last() != newCode
     }
 
@@ -194,20 +190,17 @@ class TranslatorManager {
             if (!isActive.get() || isSpeaking.get()) return@addEventListener
             if (e.result.reason != ResultReason.TranslatedSpeech) return@addEventListener
 
-            val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
-            val detectedCode     = autoDetectResult.language.split("-")[0]
+            val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result)
+                .language.split("-")[0]
 
-            // Layer 1: Confidence filter — discard low-confidence detections
-            if (autoDetectResult.confidence == "Low") return@addEventListener
-
-            // Layer 2: Streak guard — discard implausible sudden language flip
+            // Streak guard — discard implausible sudden language flip
             if (isLikelyMisdetection(detectedCode)) return@addEventListener
             recordDetection(detectedCode)
 
-            val targetLang   = if (detectedCode == codeA) langB else langA
-            val targetCode   = targetLang.locale.split("-")[0]
+            val targetLang = if (detectedCode == codeA) langB else langA
+            val targetCode = targetLang.locale.split("-")[0]
 
-            // Echo guard: if Azure detected the same language as the target, it misidentified—discard
+            // Echo guard: detected == target means Azure misidentified the source—discard
             if (detectedCode == targetCode) return@addEventListener
 
             val translated = e.result.translations[targetCode]
@@ -329,14 +322,10 @@ class TranslatorManager {
             if (!isActive.get() || isSpeaking.get()) return@addEventListener
             if (e.result.reason != ResultReason.TranslatedSpeech) return@addEventListener
 
-            val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
-            val detectedLocale   = autoDetectResult.language
-            val detectedCode     = detectedLocale.split("-")[0]
+            val detectedLocale = AutoDetectSourceLanguageResult.fromResult(e.result).language
+            val detectedCode   = detectedLocale.split("-")[0]
 
-            // Layer 1: Confidence filter — discard low-confidence detections
-            if (autoDetectResult.confidence == "Low") return@addEventListener
-
-            // Layer 2: Streak guard — discard implausible sudden language flip
+            // Streak guard — discard implausible sudden language flip
             if (isLikelyMisdetection(detectedCode)) return@addEventListener
             recordDetection(detectedCode)
 
@@ -366,7 +355,7 @@ class TranslatorManager {
 
             val targetCode = targetLang.locale.split("-")[0]
 
-            // Echo guard: if detected language == target language, Azure misidentified—discard
+            // Echo guard: detected == target means Azure misidentified the source—discard
             if (detectedCode == targetCode) return@addEventListener
 
             val translated = e.result.translations[targetCode]
