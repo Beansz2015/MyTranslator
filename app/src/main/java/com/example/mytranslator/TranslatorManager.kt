@@ -43,6 +43,27 @@ class TranslatorManager {
     // ── Auto-mode runtime ─────────────────────────────────────────────────────
     private var lastForeignLang: LangOption? = null
 
+    // ── Detection streak guard ────────────────────────────────────────────────
+    // Tracks the last N detected language codes to catch sudden implausible flips
+    private val detectionHistory = ArrayDeque<String>(5)
+    private val HISTORY_MAX = 5
+
+    private fun recordDetection(code: String) {
+        if (detectionHistory.size >= HISTORY_MAX) detectionHistory.removeFirst()
+        detectionHistory.addLast(code)
+    }
+
+    // Returns true if newCode is likely a misdetection based on recent history.
+    // Requires at least 3 history entries before making a judgment.
+    private fun isLikelyMisdetection(newCode: String): Boolean {
+        if (detectionHistory.size < 3) return false
+        val recentMajority = detectionHistory.takeLast(3)
+            .groupingBy { it }.eachCount()
+            .maxByOrNull { it.value }?.key
+        // Suspicious if both the last detected AND the majority disagree with newCode
+        return recentMajority != newCode && detectionHistory.last() != newCode
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // SAFE TEARDOWN
     // ─────────────────────────────────────────────────────────────────────────
@@ -173,8 +194,16 @@ class TranslatorManager {
             if (!isActive.get() || isSpeaking.get()) return@addEventListener
             if (e.result.reason != ResultReason.TranslatedSpeech) return@addEventListener
 
-            val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result)
-                .language.split("-")[0]
+            val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
+            val detectedCode     = autoDetectResult.language.split("-")[0]
+
+            // Layer 1: Confidence filter — discard low-confidence detections
+            if (autoDetectResult.confidence == "Low") return@addEventListener
+
+            // Layer 2: Streak guard — discard implausible sudden language flip
+            if (isLikelyMisdetection(detectedCode)) return@addEventListener
+            recordDetection(detectedCode)
+
             val targetLang   = if (detectedCode == codeA) langB else langA
             val targetCode   = targetLang.locale.split("-")[0]
 
@@ -300,9 +329,18 @@ class TranslatorManager {
             if (!isActive.get() || isSpeaking.get()) return@addEventListener
             if (e.result.reason != ResultReason.TranslatedSpeech) return@addEventListener
 
-            val detectedLocale = AutoDetectSourceLanguageResult.fromResult(e.result).language
-            val detectedCode   = detectedLocale.split("-")[0]
-            val isDefault      = detectedCode == defaultCode
+            val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
+            val detectedLocale   = autoDetectResult.language
+            val detectedCode     = detectedLocale.split("-")[0]
+
+            // Layer 1: Confidence filter — discard low-confidence detections
+            if (autoDetectResult.confidence == "Low") return@addEventListener
+
+            // Layer 2: Streak guard — discard implausible sudden language flip
+            if (isLikelyMisdetection(detectedCode)) return@addEventListener
+            recordDetection(detectedCode)
+
+            val isDefault = detectedCode == defaultCode
 
             val targetLang: LangOption
             if (isDefault) {
@@ -360,6 +398,7 @@ class TranslatorManager {
 
     private fun activateSession(onStateChange: (AppState) -> Unit) {
         lastForeignLang = null
+        detectionHistory.clear()
         isActive.set(true)
         mainHandler.post { onStateChange(AppState.LISTENING) }
     }
@@ -402,6 +441,7 @@ class TranslatorManager {
         segmentBuffer.clear()
         segmentLang          = null
         lastForeignLang      = null
+        detectionHistory.clear()
         activeOnStateChange  = null
         activeOnDetectedLang = null
         activeOnError        = null
