@@ -203,8 +203,13 @@ class TranslatorManager {
             // Echo guard: detected == target means Azure misidentified the source—discard
             if (detectedCode == targetCode) return@addEventListener
 
+            val sourceText = e.result.text
             val translated = e.result.translations[targetCode]
+
             if (!translated.isNullOrBlank()) {
+                // Identity check: translation == source means Azure translated into the wrong language
+                if (translated.trim().equals(sourceText.trim(), ignoreCase = true)) return@addEventListener
+
                 if (segmentLang != null && segmentLang != targetLang) flushBuffer()
                 segmentLang = targetLang
                 if (segmentBuffer.isNotEmpty()) segmentBuffer.append(" ")
@@ -346,6 +351,9 @@ class TranslatorManager {
                     Thread {
                         if (isActive.get()) {
                             teardownRecognizer()
+                            // Clear history so the streak guard doesn't block the default
+                            // language on the freshly narrowed 2-language recognizer
+                            detectionHistory.clear()
                             buildAutoRecognizer(defaultLangIn, listOf(defaultLangIn, detected))
                         }
                     }.start()
