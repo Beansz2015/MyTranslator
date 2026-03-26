@@ -415,9 +415,9 @@ class TranslatorManager {
         val speakerAudioConfig = AudioConfig.fromDefaultSpeakerOutput()
         val synthesizer = SpeechSynthesizer(ttsConfig, speakerAudioConfig)
 
-        // SSML with rate=fast (~20-25% faster than default)
-        // To adjust: x-slow | slow | medium | fast | x-fast | or "+20%" etc.
-        val ssml = """<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${targetLang.locale}"><voice name="${targetLang.voice}"><prosody rate="fast">${text}</prosody></voice></speak>"""
+        // SSML rate: "+15%" sits between medium (default) and fast
+        // Adjust here if needed: "+10%" | "+15%" | "+20%" | "fast" | "x-fast"
+        val ssml = """<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${targetLang.locale}"><voice name="${targetLang.voice}"><prosody rate="+15%">${text}</prosody></voice></speak>"""
 
         val onDone = { _: Any, _: Any ->
             isSpeaking.set(false)
