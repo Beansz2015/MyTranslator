@@ -44,6 +44,7 @@ class TranslatorManager {
     private var lastForeignLang: LangOption? = null
 
     // ── Detection streak guard ────────────────────────────────────────────────
+    // Tracks the last N detected language codes to catch sudden implausible flips
     private val detectionHistory = ArrayDeque<String>(5)
     private val HISTORY_MAX = 5
 
@@ -52,23 +53,15 @@ class TranslatorManager {
         detectionHistory.addLast(code)
     }
 
+    // Returns true if newCode is likely a misdetection based on recent history.
+    // Requires at least 3 history entries before making a judgment.
     private fun isLikelyMisdetection(newCode: String): Boolean {
         if (detectionHistory.size < 3) return false
         val recentMajority = detectionHistory.takeLast(3)
             .groupingBy { it }.eachCount()
             .maxByOrNull { it.value }?.key
+        // Suspicious if both the last detected AND the majority disagree with newCode
         return recentMajority != newCode && detectionHistory.last() != newCode
-    }
-
-    // ── Translation identity check ──────────────────────────────────────────────
-    // If Azure translates into the same language it heard, it misidentified the source.
-    // Also discard single-word segments — high false-positive rate in noisy environments.
-    private fun isIdentityTranslation(sourceText: String, translated: String): Boolean {
-        return translated.trim().equals(sourceText.trim(), ignoreCase = true)
-    }
-
-    private fun isTooShort(sourceText: String): Boolean {
-        return sourceText.trim().split("\\s+".toRegex()).size < 2
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -201,28 +194,24 @@ class TranslatorManager {
             if (!isActive.get() || isSpeaking.get()) return@addEventListener
             if (e.result.reason != ResultReason.TranslatedSpeech) return@addEventListener
 
-            val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result)
-                .language.split("-")[0]
+            val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
+            val detectedCode     = autoDetectResult.language.split("-")[0]
 
-            // Streak guard — discard implausible sudden language flip
+            // Layer 1: Confidence filter — discard low-confidence detections
+            if (autoDetectResult.confidence == "Low") return@addEventListener
+
+            // Layer 2: Streak guard — discard implausible sudden language flip
             if (isLikelyMisdetection(detectedCode)) return@addEventListener
             recordDetection(detectedCode)
 
-            val targetLang = if (detectedCode == codeA) langB else langA
-            val targetCode = targetLang.locale.split("-")[0]
+            val targetLang   = if (detectedCode == codeA) langB else langA
+            val targetCode   = targetLang.locale.split("-")[0]
 
-            // Echo guard: detected == target means Azure misidentified the source—discard
+            // Echo guard: if Azure detected the same language as the target, it misidentified—discard
             if (detectedCode == targetCode) return@addEventListener
 
-            val sourceText = e.result.text
             val translated = e.result.translations[targetCode]
-
             if (!translated.isNullOrBlank()) {
-                // Word count filter: single-word segments are unreliable in noise
-                if (isTooShort(sourceText)) return@addEventListener
-                // Identity check: translation == source means Azure translated into wrong language
-                if (isIdentityTranslation(sourceText, translated)) return@addEventListener
-
                 if (segmentLang != null && segmentLang != targetLang) flushBuffer()
                 segmentLang = targetLang
                 if (segmentBuffer.isNotEmpty()) segmentBuffer.append(" ")
@@ -340,10 +329,14 @@ class TranslatorManager {
             if (!isActive.get() || isSpeaking.get()) return@addEventListener
             if (e.result.reason != ResultReason.TranslatedSpeech) return@addEventListener
 
-            val detectedLocale = AutoDetectSourceLanguageResult.fromResult(e.result).language
-            val detectedCode   = detectedLocale.split("-")[0]
+            val autoDetectResult = AutoDetectSourceLanguageResult.fromResult(e.result)
+            val detectedLocale   = autoDetectResult.language
+            val detectedCode     = detectedLocale.split("-")[0]
 
-            // Streak guard — discard implausible sudden language flip
+            // Layer 1: Confidence filter — discard low-confidence detections
+            if (autoDetectResult.confidence == "Low") return@addEventListener
+
+            // Layer 2: Streak guard — discard implausible sudden language flip
             if (isLikelyMisdetection(detectedCode)) return@addEventListener
             recordDetection(detectedCode)
 
@@ -373,18 +366,11 @@ class TranslatorManager {
 
             val targetCode = targetLang.locale.split("-")[0]
 
-            // Echo guard: detected == target means Azure misidentified the source—discard
+            // Echo guard: if detected language == target language, Azure misidentified—discard
             if (detectedCode == targetCode) return@addEventListener
 
-            val sourceText = e.result.text
             val translated = e.result.translations[targetCode]
-
             if (!translated.isNullOrBlank()) {
-                // Word count filter: single-word segments are unreliable in noise
-                if (isTooShort(sourceText)) return@addEventListener
-                // Identity check: translation == source means Azure translated into wrong language
-                if (isIdentityTranslation(sourceText, translated)) return@addEventListener
-
                 if (segmentLang != null && segmentLang != targetLang) flushBuffer()
                 segmentLang = targetLang
                 if (segmentBuffer.isNotEmpty()) segmentBuffer.append(" ")
