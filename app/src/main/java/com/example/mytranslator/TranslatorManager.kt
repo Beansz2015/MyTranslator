@@ -55,7 +55,7 @@ class TranslatorManager {
     }
 
     private fun isLikelyMisdetection(newCode: String, candidateCount: Int): Boolean {
-        if (candidateCount <= 2) return false   // alternation is normal with 2 languages
+        if (candidateCount <= 2) return false
         if (detectionHistory.size < 3) return false
         val recentMajority = detectionHistory.takeLast(3)
             .groupingBy { it }.eachCount()
@@ -196,21 +196,18 @@ class TranslatorManager {
             val detectedCode = AutoDetectSourceLanguageResult.fromResult(e.result)
                 .language.split("-")[0]
 
-            // Streak guard — disabled for 2-language mode (candidateCount = 2)
             if (isLikelyMisdetection(detectedCode, 2)) return@addEventListener
             recordDetection(detectedCode)
 
             val targetLang = if (detectedCode == codeA) langB else langA
             val targetCode = targetLang.locale.split("-")[0]
 
-            // Echo guard: detected == target means Azure misidentified the source—discard
             if (detectedCode == targetCode) return@addEventListener
 
             val sourceText = e.result.text
             val translated = e.result.translations[targetCode]
 
             if (!translated.isNullOrBlank()) {
-                // Identity check: translation == source means Azure translated into the wrong language
                 if (translated.trim().equals(sourceText.trim(), ignoreCase = true)) return@addEventListener
 
                 if (segmentLang != null && segmentLang != targetLang) flushBuffer()
@@ -333,7 +330,6 @@ class TranslatorManager {
             val detectedLocale = AutoDetectSourceLanguageResult.fromResult(e.result).language
             val detectedCode   = detectedLocale.split("-")[0]
 
-            // Streak guard — only active for broad scan (3+ candidates)
             if (isLikelyMisdetection(detectedCode, candidates.size)) return@addEventListener
             recordDetection(detectedCode)
 
@@ -364,7 +360,6 @@ class TranslatorManager {
 
             val targetCode = targetLang.locale.split("-")[0]
 
-            // Echo guard: detected == target means Azure misidentified the source—discard
             if (detectedCode == targetCode) return@addEventListener
 
             val translated = e.result.translations[targetCode]
@@ -420,6 +415,10 @@ class TranslatorManager {
         val speakerAudioConfig = AudioConfig.fromDefaultSpeakerOutput()
         val synthesizer = SpeechSynthesizer(ttsConfig, speakerAudioConfig)
 
+        // SSML with rate=fast (~20-25% faster than default)
+        // To adjust: x-slow | slow | medium | fast | x-fast | or "+20%" etc.
+        val ssml = """<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${targetLang.locale}"><voice name="${targetLang.voice}"><prosody rate="fast">${text}</prosody></voice></speak>"""
+
         val onDone = { _: Any, _: Any ->
             isSpeaking.set(false)
             recognizer?.startContinuousRecognitionAsync()
@@ -430,7 +429,7 @@ class TranslatorManager {
         }
         synthesizer.SynthesisCompleted.addEventListener(onDone)
         synthesizer.SynthesisCanceled.addEventListener(onDone)
-        synthesizer.SpeakTextAsync(text)
+        synthesizer.SpeakSsmlAsync(ssml)
     }
 
     fun stop() {
